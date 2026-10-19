@@ -14,6 +14,7 @@
 | --- | --- |
 | 首页与移动端导航 | 原生 HTML、CSS、JavaScript；无构建依赖 |
 | 公开日记 | Supabase PostgREST 读取；管理员写入由 Auth JWT 和 RLS 控制 |
+| 管理员密码找回 | 管理员邮箱接收 Supabase 重置邮件，站内设置新密码 |
 | 访客留言 | Worker 验证 Turnstile、按来源限流后，用服务端密钥写入 Supabase |
 | 网络故障处理 | 读取请求可在 Worker 与 Supabase 间切换，并在失败时显示本地缓存；写入请求不自动重发 |
 | 内容渲染 | 日记与留言通过 `textContent` 插入页面，避免把用户文本作为 HTML 执行 |

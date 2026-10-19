@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const root = path.join(__dirname, "..");
-const pages = ["index.html", "diary.html", "guestbook.html"];
+const pages = ["index.html", "diary.html", "guestbook.html", "reset-password.html"];
 
 test("published pages use Monolog and link to existing local files", () => {
   for (const page of pages) {

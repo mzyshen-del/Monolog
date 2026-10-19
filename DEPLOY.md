@@ -11,6 +11,8 @@
 3. 当前生产站点为 `https://mzyblog.vercel.app`；它已加入 Turnstile widget 和 Worker 的 `GUESTBOOK_ALLOWED_ORIGINS`。如更换站点域名，需要同步更新两处配置。
 4. 再次部署并按下方清单验证。预览域名若不在允许列表内，只能阅读留言。
 
+管理员密码找回使用 `https://mzyblog.vercel.app/reset-password.html` 作为回跳地址。需要在 Supabase **Authentication → URL Configuration** 中将这个地址加入 Redirect URLs；若更换站点域名，也要同步更新此地址。
+
 ## GitHub Pages
 
 1. 在现有仓库的 **Settings → Pages** 选择 **Deploy from a branch**，分支选 `main`，目录选 `/ (root)`。

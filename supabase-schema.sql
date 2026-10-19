@@ -1,4 +1,4 @@
-﻿-- Run in Supabase SQL editor
+-- Run in Supabase SQL editor
 
 create extension if not exists pgcrypto;
 

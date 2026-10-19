@@ -5,9 +5,11 @@ const SUPABASE_URL = window.BLOG_SUPABASE_URL || "";
 const SUPABASE_KEY = window.BLOG_SUPABASE_ANON_KEY || "";
 const API_BASE = window.BLOG_API_BASE || SUPABASE_URL;
 const ADMIN_EMAIL = (window.BLOG_ADMIN_EMAIL || "").toLowerCase();
+const TURNSTILE_SITE_KEY = window.BLOG_TURNSTILE_SITE_KEY || "";
 let runtimeApiBase = API_BASE;
 const DIARY_CACHE_KEY = "blog_diary_cache";
 const GUESTBOOK_CACHE_KEY = "blog_guestbook_cache";
+const GUESTBOOK_MAX_LENGTH = 500;
 
 const ACCESS_TOKEN_KEY = "blog_supabase_access_token";
 const USER_EMAIL_KEY = "blog_supabase_user_email";
@@ -112,7 +114,7 @@ function clearSession() {
 }
 
 async function sbRequest(path, options = {}) {
-  const method = options.method || "GET";
+  const method = (options.method || "GET").toUpperCase();
   const token = options.token || "";
   const body = options.body;
   const prefer = options.prefer;
@@ -122,7 +124,7 @@ async function sbRequest(path, options = {}) {
     "Content-Type": "application/json",
   };
 
-  headers.Authorization = `Bearer ${token || SUPABASE_KEY}`;
+  if (token) headers.Authorization = `Bearer ${token}`;
   if (prefer) headers.Prefer = prefer;
 
   async function doFetch(base) {
@@ -133,43 +135,48 @@ async function sbRequest(path, options = {}) {
     });
   }
 
+  // A write may have reached Supabase even when its response was lost.
+  // Only reads are safe to repeat against another endpoint.
   const candidates = [runtimeApiBase];
   const altBase = runtimeApiBase === API_BASE ? SUPABASE_URL : API_BASE;
-  if (altBase && !candidates.includes(altBase)) candidates.push(altBase);
+  if (method === "GET" && altBase && !candidates.includes(altBase)) candidates.push(altBase);
 
   let lastErr = null;
   for (const base of candidates) {
+    let resp;
     try {
-      const resp = await doFetch(base);
-
-      // Transient server/proxy errors: try the alternate base.
-      if (resp.status >= 500) {
-        lastErr = new Error(`HTTP ${resp.status}`);
-        continue;
-      }
-
-      if (!resp.ok) {
-        let message = `HTTP ${resp.status}`;
-        try {
-          const err = await resp.json();
-          message = err.msg || err.message || err.error_description || err.error || message;
-        } catch {
-          try {
-            const text = await resp.text();
-            if (text) message = text;
-          } catch {}
-        }
-        throw new Error(message);
-      }
-
-      runtimeApiBase = base;
-      const ct = resp.headers.get("content-type") || "";
-      if (ct.includes("application/json")) return resp.json();
-      return null;
+      resp = await doFetch(base);
     } catch (err) {
       lastErr = err;
       continue;
     }
+
+    // A read may use the alternate endpoint after a transient server error.
+    if (resp.status >= 500) {
+      lastErr = new Error(`HTTP ${resp.status}`);
+      continue;
+    }
+
+    if (!resp.ok) {
+      let message = `HTTP ${resp.status}`;
+      try {
+        const err = await resp.json();
+        message = err.msg || err.message || err.error_description || err.error || message;
+      } catch {
+        try {
+          const text = await resp.text();
+          if (text) message = text;
+        } catch {}
+      }
+      const error = new Error(message);
+      error.status = resp.status;
+      throw error;
+    }
+
+    runtimeApiBase = base;
+    const ct = resp.headers.get("content-type") || "";
+    if (ct.includes("application/json")) return resp.json();
+    return null;
   }
 
   throw lastErr || new Error("request failed");
@@ -219,12 +226,19 @@ async function apiLoadGuestbook() {
   return sbRequest(`/rest/v1/guestbook_messages?select=id,content,created_at&order=created_at.desc&limit=100`);
 }
 
-async function apiInsertGuestbook(content) {
-  return sbRequest(`/rest/v1/guestbook_messages`, {
+async function apiInsertGuestbook(content, turnstileToken) {
+  const response = await fetch(`${API_BASE}/guestbook`, {
     method: "POST",
-    body: [{ content }],
-    prefer: "return=representation",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, turnstileToken }),
   });
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(data.message || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 
 initGuestbook();
@@ -242,6 +256,33 @@ async function initGuestbook() {
   if (!hasConfig()) {
     if (statusEl) statusEl.textContent = "配置无效：请检查 supabase-config.js。";
     return;
+  }
+
+  const submitBtn = guestForm.querySelector('button[type="submit"]');
+  let turnstileWidgetId = null;
+  if (submitBtn) submitBtn.disabled = true;
+  if (!TURNSTILE_SITE_KEY || API_BASE === SUPABASE_URL) {
+    if (statusEl) statusEl.textContent = "留言验证尚未配置，暂时只能阅读留言。";
+  } else {
+    const challengeScript = document.createElement("script");
+    challengeScript.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    challengeScript.async = true;
+    challengeScript.onload = () => {
+      try {
+        turnstileWidgetId = window.turnstile.render("#guestbook-turnstile", {
+          sitekey: TURNSTILE_SITE_KEY,
+          size: "flexible",
+        });
+        if (submitBtn) submitBtn.disabled = false;
+        if (statusEl) statusEl.textContent = "完成验证后即可留言。";
+      } catch {
+        if (statusEl) statusEl.textContent = "留言验证加载失败，请刷新页面。";
+      }
+    };
+    challengeScript.onerror = () => {
+      if (statusEl) statusEl.textContent = "留言验证加载失败，请检查网络。";
+    };
+    document.head.appendChild(challengeScript);
   }
 
   async function loadMessages() {
@@ -294,18 +335,33 @@ async function initGuestbook() {
 
   guestForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (submitBtn?.disabled) return;
     const fd = new FormData(guestForm);
     const content = String(fd.get("message") || "").trim();
     if (!content) return;
+    if (content.length > GUESTBOOK_MAX_LENGTH) {
+      if (statusEl) statusEl.textContent = `留言不能超过 ${GUESTBOOK_MAX_LENGTH} 个字符。`;
+      return;
+    }
+    const turnstileToken = turnstileWidgetId === null
+      ? "" : window.turnstile.getResponse(turnstileWidgetId);
+    if (!turnstileToken) {
+      if (statusEl) statusEl.textContent = "请先完成留言验证。";
+      return;
+    }
 
     if (statusEl) statusEl.textContent = "正在提交留言...";
+    if (submitBtn) submitBtn.disabled = true;
     try {
-      await apiInsertGuestbook(content);
+      await apiInsertGuestbook(content, turnstileToken);
       guestForm.reset();
       if (statusEl) statusEl.textContent = "留言成功。";
       await loadMessages();
     } catch (err) {
       if (statusEl) statusEl.textContent = `留言失败：${err.message}`;
+    } finally {
+      if (turnstileWidgetId !== null) window.turnstile.reset(turnstileWidgetId);
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 
@@ -424,13 +480,27 @@ async function initDiary() {
 
   async function refreshAuthState() {
     const token = getToken();
-    const email = getCurrentEmail();
-    isAdmin = token.length > 0 && email === ADMIN_EMAIL;
+    isAdmin = false;
+    setEditorVisible(false);
+    if (token) {
+      if (authStatus) authStatus.textContent = "正在验证登录状态...";
+      try {
+        const user = await apiGetUser(token);
+        const email = String(user?.email || "").toLowerCase();
+        isAdmin = email === ADMIN_EMAIL;
+        if (isAdmin) setSession(token, email);
+        else clearSession();
+      } catch (err) {
+        if (err.status === 401 || err.status === 403) clearSession();
+        if (authStatus && err.status !== 401 && err.status !== 403) {
+          authStatus.textContent = "暂时无法验证登录状态，请检查网络后刷新页面。";
+        }
+      }
+    }
     setEditorVisible(isAdmin);
-
-    if (authStatus) {
+    if (authStatus && (!token || isAdmin || !getToken())) {
       authStatus.textContent = isAdmin
-        ? `已以管理员身份登录：${email}`
+        ? `已以管理员身份登录：${getCurrentEmail()}`
         : "未登录时只可查看日记。";
     }
 
@@ -458,17 +528,21 @@ async function initDiary() {
         if (!accessToken) throw new Error("未获取到 access token");
 
         const lowerEmail = String(userEmail).toLowerCase();
-        setSession(accessToken, lowerEmail);
-
         if (lowerEmail !== ADMIN_EMAIL) {
-          clearSession();
           if (authStatus) authStatus.textContent = "登录成功，但该账号不是管理员邮箱。";
           return;
         }
 
-        await apiGetUser(accessToken);
+        const user = await apiGetUser(accessToken);
+        if (String(user?.email || "").toLowerCase() !== ADMIN_EMAIL) {
+          throw new Error("管理员身份验证失败");
+        }
+        setSession(accessToken, lowerEmail);
         if (passwordInput) passwordInput.value = "";
-        await refreshAuthState();
+        isAdmin = true;
+        setEditorVisible(true);
+        if (authStatus) authStatus.textContent = `已以管理员身份登录：${lowerEmail}`;
+        await loadEntries();
       } catch (err) {
         clearSession();
         if (authStatus) authStatus.textContent = `登录失败：${err.message}`;
@@ -491,6 +565,7 @@ async function initDiary() {
     diaryForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       if (!isAdmin) return;
+      if (diarySaveBtn.disabled) return;
 
       const token = getToken();
       const title = diaryTitle.value.trim();
@@ -498,6 +573,7 @@ async function initDiary() {
       if (!title || !content) return;
 
       const editId = diaryEditId.value.trim();
+      diarySaveBtn.disabled = true;
       try {
         if (editId) {
           await apiUpdateDiary(token, editId, title, content);
@@ -510,6 +586,9 @@ async function initDiary() {
         await loadEntries();
       } catch (err) {
         if (diaryStatus) diaryStatus.textContent = `保存失败：${err.message}`;
+        if (err.status === 401 || err.status === 403) await refreshAuthState();
+      } finally {
+        diarySaveBtn.disabled = false;
       }
     });
 
@@ -536,6 +615,7 @@ async function initDiary() {
           await loadEntries();
         } catch (err) {
           if (diaryStatus) diaryStatus.textContent = `删除失败：${err.message}`;
+          if (err.status === 401 || err.status === 403) await refreshAuthState();
         }
         return;
       }

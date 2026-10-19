@@ -6,3 +6,11 @@ compatibility_date = "2026-02-26"
 # Replace with your own Supabase project URL.
 SUPABASE_URL = "https://ndiyifgkqlzoodfarlxh.supabase.co"
 
+[[ratelimits]]
+name = "GUESTBOOK_RATE_LIMITER"
+namespace_id = "918274"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+

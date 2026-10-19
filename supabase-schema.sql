@@ -16,6 +16,13 @@ create table if not exists public.guestbook_messages (
   created_at timestamptz not null default now()
 );
 
+-- NOT VALID keeps old rows untouched while enforcing the limit on new messages.
+alter table public.guestbook_messages
+  drop constraint if exists guestbook_content_length;
+alter table public.guestbook_messages
+  add constraint guestbook_content_length
+  check (char_length(trim(content)) between 1 and 500) not valid;
+
 alter table public.diary_entries enable row level security;
 alter table public.guestbook_messages enable row level security;
 
@@ -54,8 +61,9 @@ for select
 using (true);
 
 drop policy if exists public_insert_guestbook on public.guestbook_messages;
-create policy public_insert_guestbook
-on public.guestbook_messages
-for insert
-with check (true);
+
+-- The Worker verifies Turnstile before using its server-only secret key.
+-- Remove direct browser inserts even if an older project granted table privileges.
+revoke insert on public.guestbook_messages from anon, authenticated;
+grant insert on public.guestbook_messages to service_role;
 

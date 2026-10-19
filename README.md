@@ -42,10 +42,10 @@ python -m http.server 8000
 打开 `http://localhost:8000/`。现有 `supabase-config.js` 指向已配置的远端 API，因此本地页面也会尝试读取远端公开内容。留言功能只有在 Turnstile widget 允许本地 hostname，且 Worker 的 `GUESTBOOK_ALLOWED_ORIGINS` 包含 `http://localhost:8000` 时才可验证。
 
 ```powershell
-node --test tests/request.test.cjs tests/worker.test.cjs tests/site.test.cjs
+node --test tests/*.test.cjs
 ```
 
-测试覆盖读取故障切换、写入不重发、过期管理员令牌、留言来源限制、限流和 Turnstile 验证。测试使用模拟网络，不会写入真实数据库。
+测试覆盖读取故障切换、写入不重发、过期管理员令牌、留言来源限制、限流、Turnstile 验证和密码找回流程。测试使用模拟网络，不会写入真实数据库。
 
 ## 部署
 
@@ -53,4 +53,4 @@ node --test tests/request.test.cjs tests/worker.test.cjs tests/site.test.cjs
 - [Worker、Turnstile 与数据库上线顺序](WORKER_DEPLOY_STEPS.md)
 - [中国大陆访问加速说明](CN_ACCELERATION.md)
 
-2026-10-19 的线上验收确认：首页、日记与留言页返回 200；公开日记和留言读取正常；完成 Turnstile 后的测试留言写入成功，随后已删除；匿名直接写入留言表返回 401；无效 Turnstile 令牌和旧直写入口均被 Worker 拒绝。管理员登录后的日记增删改与不同设备的布局仍需人工验收。仓库没有包含私有密钥。
+2026-10-19 的线上验收确认：首页、日记与留言页返回 200；公开日记和留言读取正常；完成 Turnstile 后的测试留言写入成功，随后已删除；匿名直接写入留言表返回 401；无效 Turnstile 令牌和旧直写入口均被 Worker 拒绝。项目负责人已在电脑和手机上验收页面与窗口显示，并确认密码找回、管理员登录及日记增删改正常。仓库没有包含私有密钥。
